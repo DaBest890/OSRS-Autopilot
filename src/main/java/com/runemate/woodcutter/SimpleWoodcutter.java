@@ -219,9 +219,6 @@ public class SimpleWoodcutter extends LoopingBot implements SettingsListener {
         }
         logger.info("Returned to woodcutting area.");
     }
-
-
-
     public void bankLogs() {  // bankLogs() remains focused only on banking actions
         walkToBank();
         if (Bank.isOpen()) {
