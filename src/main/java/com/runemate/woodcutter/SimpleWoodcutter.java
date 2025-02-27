@@ -359,16 +359,10 @@ public class SimpleWoodcutter extends LoopingBot implements SettingsListener {
     }
     private void chopTrees() {
         // First thing we want to do when we're meant to be chopping is checking that we can actually chop!
-        // If our inventory is full, we want to update the state to 'DROP' so that the bot will start dropping our logs.
+        // If our inventory is full, we want to update the state to 'DROP' or 'BANK' so that the bot handles logs accordingly.
         if (Inventory.isFull()) {
-            if (settings.shouldDropLogs()) {
-                state = WoodcuttingState.DROP;
-                logger.info("Inventory is full, starting to drop logs");
-            } else {
-                state = WoodcuttingState.BANK;
-                logger.info("Inventory is full, heading to bank");
-                bankLogs();
-            }
+            state = settings.shouldDropLogs() ? WoodcuttingState.DROP : WoodcuttingState.BANK;
+            logger.info("Inventory is full, switching state to: " + state);
             return;
         }
 
@@ -376,7 +370,7 @@ public class SimpleWoodcutter extends LoopingBot implements SettingsListener {
         // and avoid spam clicking, as well as walking towards the next tree.
         Player player = Players.getLocal();
         if (player == null) {
-            logger.warn("Unable to find local player");
+            logger.warn("Unable to find local player.");
             return;
         }
 
@@ -392,43 +386,34 @@ public class SimpleWoodcutter extends LoopingBot implements SettingsListener {
         // and then looking for an object in-game that has that name.
         String treeName = settings.getTreeType().getTreeName();
         GameObject tree = GameObjects.newQuery().names(treeName).results().nearest();
-        if (tree == null) {
-            logger.warn("Unable to find tree with name: {}", treeName);
+
+        // Ensure that the tree exists and is still valid
+        if (tree == null || !tree.isValid()) {
+            logger.warn("No valid tree found: " + treeName);
             return;
         }
 
         // Just because we managed to find a nearby tree doesn't mean that we can immediately interact with it!
         // This block of code will do a few things:
-        //  1. Check if the tree is invisible, and if it isn't...
-        //  2. Check how far away from the tree we are. If we're reasonably far away then we might need to build a path to it
-        //  3. Build a path to the tree, and walk it using 'step()'
-        //  4. Finally, we can try turning our camera towards the tree.
-        if (!tree.isVisible()) {
-            if (Distance.between(player, tree) > 8) {
-                logger.info("We're far away from {}, walking towards it", tree);
+        //  1. Check if the tree is too far away and move towards it.
+        //  2. Build a path to the tree, and walk it using 'step()'.
+        //  3. Ensure the tree is visible for interaction.
 
-                // Building a path can be tricky! The tiles directly underneath GameObjects often can't be walked on.
-                // The path-builder doesn't know this, so will fail to build a path to it.
-                // To help get around this, we can try walking to a tile that's next to the tree instead.
-                Area.Rectangular area = tree.getArea();
-                if (area == null) {
-                    logger.warn("Unable to find an appropriate tile next to the tree to walk to!");
-                    return;
-                }
+        if (Distance.between(player, tree) > 8) {
+            logger.info("We're far away from {}, walking towards it", tree);
 
-                ScenePath path = ScenePath.buildBetween(player, area.getSurroundingCoordinates());
-                if (path == null) {
-                    logger.warn("Unable to find a path to {}", tree);
-                    return;
-                }
-
-                // The 'step()' method just takes the next step along the path, it doesn't walk the whole thing.
+            // Using ScenePath to walk efficiently towards the tree.
+            ScenePath path = ScenePath.buildTo(tree);
+            if (path != null) {
                 path.step();
-                return;
+                // Wait until we are close enough to the tree before continuing
+                Execution.delayUntil(() -> Distance.between(player, tree) <= 4, 1500);
             }
+            return;
+        }
 
-            // This turns the camera in a background task, which is why it's called 'concurrentlyTurnTo'.
-            // If we wanted to wait for the camera to finish moving before doing anything else, we could just use 'turnTo' instead.
+        // If the tree isn't visible, turn the camera towards it.
+        if (!tree.isVisible()) {
             Camera.concurrentlyTurnTo(tree);
         }
 
@@ -447,10 +432,22 @@ public class SimpleWoodcutter extends LoopingBot implements SettingsListener {
         //
         // The delay is necessary in order to stop the bot from spam-clicking the tree.
         // If both of these methods succeed, we know that we have successfully started chopping the tree.
-        if (tree.interact("Chop down") && Execution.delayUntil(() -> player.getAnimationId() != -1, () -> player.isMoving(), 1200)) {
-            logger.info("Chopping tree");
+
+        if (tree.interact("Chop down")) {
+            boolean startedChopping = Execution.delayUntil(
+                    () -> player.getAnimationId() != -1,  // Wait until chopping starts
+                    1200
+            );
+            if (startedChopping) {
+                logger.info("Chopping tree.");
+            } else {
+                logger.warn("Failed to start chopping.");
+            }
+        } else {
+            logger.warn("Tree interaction failed.");
         }
     }
+
 
 
     /*
