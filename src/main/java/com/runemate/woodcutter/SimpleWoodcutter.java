@@ -279,7 +279,7 @@ public class SimpleWoodcutter extends LoopingBot implements SettingsListener {
             return;
         }
         // Ensure the bot is not in an empty location before looking for trees
-        if (woodcuttingArea == null || GameObjects.newQuery().names(settings.getTreeType().getTreeName()).within(woodcuttingArea).results().isEmpty()) {
+        if (woodcuttingArea == null || GameObjects.newQuery().names(settings.getTreeType().getTreeName()).visible().results().isEmpty()) {
             logger.warn("No valid trees found in the area. Resetting woodcutting area...");
             setWoodcuttingArea();  // 🔹 Try resetting the area to avoid getting stuck
             return;
