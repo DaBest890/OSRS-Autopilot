@@ -399,7 +399,7 @@ public class SimpleWoodcutter extends LoopingBot implements SettingsListener {
         //  2. Build a path to the tree, and walk it using 'step()'.
         //  3. Ensure the tree is visible for interaction.
 
-        if (Distance.between(player, tree) > 8) {
+        if (Distance.between(player, tree) > 6) {
             logger.info("We're far away from {}, walking towards it", tree);
 
             // Using ScenePath to walk efficiently towards the tree.
