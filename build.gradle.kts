@@ -24,12 +24,12 @@ runemate {
     submissionToken = ""
 
     manifests {
-        create("Simple Woodcutter") {
+        create("Basic Woodcutter") {
             mainClass = "com.runemate.woodcutter.SimpleWoodcutter"
-            tagline = "My simple woodcutter!"
-            description = "A simple woodcutter that will chop and drop trees anywhere!"
+            tagline = "Max's Woodcutter"
+            description = "This woodcutter will do short-range woodcutting, with the ability to Chop, Drop, and Bank"
             version = "1.0.0"
-            internalId = "example-woodcutter"
+            internalId = "maximo-woodcutter"
 
             categories(Category.WOODCUTTING)
         }

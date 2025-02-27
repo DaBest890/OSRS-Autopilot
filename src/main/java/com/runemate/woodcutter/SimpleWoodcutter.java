@@ -2,8 +2,11 @@ package com.runemate.woodcutter;
 
 import com.runemate.game.api.hybrid.entities.GameObject;
 import com.runemate.game.api.hybrid.entities.Player;
+import com.runemate.game.api.hybrid.input.Keyboard;
 import com.runemate.game.api.hybrid.local.Camera;
 import com.runemate.game.api.hybrid.local.hud.interfaces.Inventory;
+import com.runemate.game.api.hybrid.location.Coordinate;
+import com.runemate.game.api.hybrid.location.navigation.Landmark;
 import com.runemate.game.api.hybrid.location.navigation.cognizant.ScenePath;
 import com.runemate.game.api.hybrid.region.GameObjects;
 import com.runemate.game.api.hybrid.region.Players;
@@ -15,15 +18,13 @@ import com.runemate.game.api.script.framework.listeners.events.SettingChangedEve
 import com.runemate.ui.setting.annotation.open.SettingsProvider;
 import com.runemate.game.api.hybrid.location.Area;
 import com.runemate.game.api.hybrid.local.hud.interfaces.SpriteItem;
+import com.sun.glass.events.KeyEvent;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import java.lang.Override;
 import java.lang.String;
 import com.runemate.pathfinder.Pathfinder;
 import com.runemate.game.api.hybrid.local.hud.interfaces.Bank;
-import com.runemate.game.api.hybrid.location.Coordinate;
-import com.runemate.game.api.hybrid.location.navigation.Path;
-import com.runemate.game.api.hybrid.region.Banks;
 
 
 
@@ -74,6 +75,14 @@ public class SimpleWoodcutter extends LoopingBot implements SettingsListener {
     private Pathfinder pathfinder = Pathfinder.create();
 
     /*
+    Globally declare instance variables
+     */
+    private static Area woodcuttingArea;
+    private boolean SettingsConfirmed = false;
+    private boolean bankModeEnabled = false;
+
+
+    /*
      * #onStart() is a method inherited from AbstractBot that we can override to perform actions when the bot is started.
      * In this implementation we are registering this class (which implements SettingsListener) with the EventDispatcher. This means
      * that the EventDispatcher will know to send any 'settings' events to this class.
@@ -102,6 +111,24 @@ public class SimpleWoodcutter extends LoopingBot implements SettingsListener {
         // Ensure bot doesn't start before user confirms settings
         if (!settingsConfirmed) return;
 
+        // Check if the user presses F1 to set a new woodcutting area
+        if (Keyboard.isPressed(KeyEvent.VK_F1)) {
+            setWoodcuttingArea(); // Dynamically sets the woodcutting area
+            logger.info("Woodcutting area set at: " + woodcuttingArea);
+        }
+        if (Keyboard.isPressed(KeyEvent.VK_F2)) {
+            bankModeEnabled = !bankModeEnabled;
+            logger.info("Bank mode enabled: " + bankModeEnabled);
+            Execution.delay(500); // Prevents spam toggles
+        }
+        // ✅ Automatically determine whether to BANK or DROP logs when inventory is full
+        if (Inventory.isFull()) {
+            if (settings.shouldDropLogs()) {
+                state = WoodcuttingState.DROP; // Drop logs instead of banking
+            } else if (bankModeEnabled) {
+                state = WoodcuttingState.BANK; // Bank logs if banking is enabled
+            }
+        }
         switch (state) {
             case CHOP:
                 chopTrees();
@@ -114,7 +141,74 @@ public class SimpleWoodcutter extends LoopingBot implements SettingsListener {
                 break;
         }
     }
-    private void bankLogs() {
+
+
+    // This method will setWoodcuttingArea dynamically
+    public void setWoodcuttingArea() {
+        Coordinate playerPos = Players.getLocal().getPosition();
+        if (playerPos != null) {
+            woodcuttingArea = Area.rectangular(playerPos.derive(-3, -3), playerPos.derive(3, 3)); // Define a 7x7 tile area around player
+            logger.info("Woodcutting area set to: " + woodcuttingArea);
+        } else {
+            logger.warn("Cannot set woodcutting area. Player position is null.");
+        }
+    }
+
+
+    public void walkToBank() {
+        // Build a path using Pathfinder
+        if (pathfinder.pathBuilder()
+                .start(Players.getLocal().getPosition()) // Start from player's current position
+                .destination(Landmark.BANK) // Target the nearest bank
+                .preferSpeed() // Faster navigation
+                .enableTeleports(false) // No teleports
+                .avoidWilderness(true) // Avoid wilderness
+                .findPath() == null) { // ✅ Ensure a path was actually found
+            logger.warn("❌ No valid path found. Cannot walk to the bank.");
+            return;
+        }
+        // Walking to the bank
+        while (pathfinder.getLastPath() != null && pathfinder.getLastPath().isValid()) {
+            pathfinder.getLastPath().step(); // ✅ Move towards the bank naturally
+        }
+    }
+    public void walkBackToWoodcuttingArea() {
+        // Build a path using Pathfinder
+        if (pathfinder.pathBuilder()
+                .start(Players.getLocal().getPosition()) // Start from player's current position
+                .destination(woodcuttingArea) // Target the nearest bank
+                .preferSpeed() // Faster navigation
+                .enableTeleports(false) // No teleports
+                .avoidWilderness(true) // Avoid wilderness
+                .findPath() == null) { // ✅ Ensure a path was actually found
+            logger.warn("❌ No valid path found. Cannot walk to the bank.");
+            return;
+        }
+        // Walking to the set woodcuttingArea
+        while (pathfinder.getLastPath() != null && pathfinder.getLastPath().isValid()) {
+            pathfinder.getLastPath().step(); // ✅ Move towards the bank naturally
+        }
+        logger.info("Returned to woodcutting area.");
+    }
+
+
+
+    public void bankLogs() {  // bankLogs() remains focused only on banking actions
+        walkToBank();
+        if (Bank.isOpen()) {
+            logger.info("✅ Successfully opened bank.");
+            Bank.depositInventory();
+            Execution.delay(1000, 2000);
+            logger.info("📦 Logs successfully deposited.");
+        } else {
+            logger.warn("⚠️ Failed to open the bank.");
+        }
+        walkBackToWoodcuttingArea();
+        state = WoodcuttingState.CHOP; // Return to chopping after banking
+    }
+
+
+    /*** private void OriginalbankLogs() {
         // 🟢 If no logs, return to chopping
         if (!Inventory.contains(settings.getTreeType().getLogName())) {
             state = WoodcuttingState.CHOP;
@@ -236,13 +330,14 @@ public class SimpleWoodcutter extends LoopingBot implements SettingsListener {
         Execution.delay(800, 1200);
         Bank.close();
         state = WoodcuttingState.CHOP;
-        logger.info("✅ Banked logs, resuming chopping.");
+        logger.info("✅ Deposited logs, resuming chopping.");
     }
 
     /*
      * This method will drop logs one by one.
      * It uses RuneMate's QueryBuilder to find logs in the inventory.
      */
+
     private void dropLogs() {
         // Get the log name from settings
         String logName = settings.getTreeType().getLogName();
@@ -272,6 +367,7 @@ public class SimpleWoodcutter extends LoopingBot implements SettingsListener {
             } else {
                 state = WoodcuttingState.BANK;
                 logger.info("Inventory is full, heading to bank");
+                bankLogs();
             }
             return;
         }
