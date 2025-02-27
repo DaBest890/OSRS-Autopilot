@@ -1,5 +1,4 @@
 package com.runemate.woodcutter;
-
 import com.runemate.game.api.hybrid.entities.GameObject;
 import com.runemate.game.api.hybrid.entities.Player;
 import com.runemate.game.api.hybrid.input.Keyboard;
@@ -25,11 +24,6 @@ import java.lang.Override;
 import java.lang.String;
 import com.runemate.pathfinder.Pathfinder;
 import com.runemate.game.api.hybrid.local.hud.interfaces.Bank;
-
-
-
-
-
 /*
  * LoopingBot is the framework I recommend for most people. The other options are TaskBot and TreeBot which each have their own
  * use-cases, but realistically LoopingBot is the simplest in almost all cases.
@@ -150,8 +144,6 @@ public class SimpleWoodcutter extends LoopingBot implements SettingsListener {
                 break;
         }
     }
-
-
     // This method will dynamically set the woodcutting area
     public void setWoodcuttingArea() {
         Player player = getSafePlayer(); // ✅ Get safe player reference
@@ -210,7 +202,6 @@ public class SimpleWoodcutter extends LoopingBot implements SettingsListener {
             logger.warn("Woodcutting area is not set. Unable to return.");
             return;
         }
-
         // Build a path using Pathfinder
         if (pathfinder.pathBuilder()
                 .start(Players.getLocal().getPosition()) // Start from player's current position
