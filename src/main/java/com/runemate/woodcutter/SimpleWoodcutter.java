@@ -277,24 +277,29 @@ public class SimpleWoodcutter extends LoopingBot implements SettingsListener {
         // Here we are using our 'WoodcuttingSettings' to work out which type of tree we want to chop,
         // and then looking for an object in-game that has that name.
         String treeName = settings.getTreeType().getTreeName();
-        // Check for nearby trees first (visible trees)
-        final GameObject tree = GameObjects.newQuery()
+        int maxPlayersAllowed = settings.getMaxPlayersPerTree();
+
+        // Find trees with less than the max allowed players chopping them
+        GameObject tree = GameObjects.newQuery()
                 .names(treeName)
+                .filter(t -> t.getPosition() != null && t.getPosition().getOccupants() <= maxPlayersAllowed)
                 .visible()
                 .results()
                 .nearest();
+
         // If no visible trees are found, expand the search to non-visible trees
         if (tree == null) {
             logger.warn("No visible trees found. Expanding search...");
-            final GameObject newTree = GameObjects.newQuery()
+            GameObject newTree = GameObjects.newQuery()
                     .names(treeName)
+                    .filter(t -> t.getPosition() != null && t.getPosition().getOccupants() <= maxPlayersAllowed)
                     .results()
                     .nearest();
 
             // If bot still can't find any trees, it waits and retries later
             if (newTree == null) {
                 logger.warn("No trees found. Waiting before retrying...");
-                Execution.delay(1000, 2000); // Small delay before retrying
+                Execution.delay(settings.getMinTreeTimeout(), settings.getMaxTreeTimeout()); // Wait within defined time limits before retrying
                 return;
             }
 
@@ -303,15 +308,19 @@ public class SimpleWoodcutter extends LoopingBot implements SettingsListener {
             //  1. Check if the tree is too far away and move towards it.
             //  2. Build a path to the tree, and walk it using 'step()'.
             //  3. Ensure the tree is visible for interaction.
+
             if (Distance.between(player, newTree) > 6) {
                 logger.info("We're far away from {}, walking towards it", newTree);
-                // Using ScenePath to walk efficiently towards the tree.
                 ScenePath path = ScenePath.buildTo(newTree);
                 if (path != null) {
                     path.step();
+
+                    // Final reference to avoid lambda variable mutation issues
+                    final GameObject targetTree = newTree;
+
                     // Ensures the bot keeps stepping until we are close to the tree.
                     // If it doesn't reach within 1.5 seconds, it will continue execution.
-                    Execution.delayUntil(() -> Distance.between(player, newTree) <= 4, 1500); // Ensures the bot keeps stepping until we are close to the new tree, and if it doesn't reach within 1.5 seconds it will continue
+                    Execution.delayUntil(() -> Distance.between(player, targetTree) <= 4, 1500);
                 }
                 return;
             }
@@ -320,6 +329,7 @@ public class SimpleWoodcutter extends LoopingBot implements SettingsListener {
             if (!newTree.isVisible()) {
                 Camera.concurrentlyTurnTo(newTree);
             }
+
             // There's quite a lot to break down in this line, so let's take it step-by-step.
             //
             // Most entities in the game are 'Interactable', which means we can use the 'interact' method on them.
@@ -348,6 +358,7 @@ public class SimpleWoodcutter extends LoopingBot implements SettingsListener {
             }
         }
     }
+
 
 
 
