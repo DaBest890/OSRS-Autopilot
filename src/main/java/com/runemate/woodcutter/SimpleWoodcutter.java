@@ -259,96 +259,93 @@ public class SimpleWoodcutter extends LoopingBot implements SettingsListener {
             logger.info("Inventory is full, switching state to: {}", state);
             return;
         }
+
         // Safely get the local player
         Player player = Players.getLocal();
         if (player == null || player.getPosition() == null) {
             logger.warn("Cannot chop trees: Player or position is null.");
             return;
         }
-        // This gets a reference to the current player. We're going to use this to check if we're already animating
-        // and avoid spam clicking, as well as walking towards the next tree.
-        if (player == null) {
-            logger.warn("Unable to find local player.");
-            return;
-        }
 
-        // When our player is idle our animation ID will be -1. If our animation isn't -1, we can safely assume
-        // that we're already chopping and don't need to do anything else!
+        // When our player is idle, our animation ID will be -1. If our animation isn't -1, we can assume we're chopping.
         if (player.getAnimationId() != -1) {
             logger.info("Already chopping...");
             return;
         }
 
-        // Ensure the bot is not in an empty location before looking for trees
-        if (woodcuttingArea == null || GameObjects.newQuery().names(settings.getTreeType().getTreeName()).visible().results().isEmpty()) {
-            logger.warn("No valid trees found in the area. Resetting woodcutting area...");
-            setWoodcuttingArea();  // 🔹 Try resetting the area to avoid getting stuck
-            return;
-        }
         // RuneMate's QueryBuilders are a powerful way to locate virtually anything in the game.
         // Here we are using our 'WoodcuttingSettings' to work out which type of tree we want to chop,
         // and then looking for an object in-game that has that name.
         String treeName = settings.getTreeType().getTreeName();
-        GameObject tree = GameObjects.newQuery().names(treeName).results().nearest();
+        // Check for nearby trees first (visible trees)
+        final GameObject tree = GameObjects.newQuery()
+                .names(treeName)
+                .visible()
+                .results()
+                .nearest();
+        // If no visible trees are found, expand the search to non-visible trees
+        if (tree == null) {
+            logger.warn("No visible trees found. Expanding search...");
+            final GameObject newTree = GameObjects.newQuery()
+                    .names(treeName)
+                    .results()
+                    .nearest();
 
-        // Ensure that the tree exists and is still valid
-        if (tree == null || !tree.isValid()) {
-            logger.warn("No valid tree found: {}", treeName);
-            return;
-        }
-
-        // Just because we managed to find a nearby tree doesn't mean that we can immediately interact with it!
-        // This block of code will do a few things:
-        //  1. Check if the tree is too far away and move towards it.
-        //  2. Build a path to the tree, and walk it using 'step()'.
-        //  3. Ensure the tree is visible for interaction.
-
-        if (Distance.between(player, tree) > 6) {
-            logger.info("We're far away from {}, walking towards it", tree);
-
-            // Using ScenePath to walk efficiently towards the tree.
-            ScenePath path = ScenePath.buildTo(tree);
-            if (path != null) {
-                path.step();
-                // Wait until we are close enough to the tree before continuing
-                Execution.delayUntil(() -> Distance.between(player, tree) <= 4, 1500);
+            // If bot still can't find any trees, it waits and retries later
+            if (newTree == null) {
+                logger.warn("No trees found. Waiting before retrying...");
+                Execution.delay(1000, 2000); // Small delay before retrying
+                return;
             }
-            return;
-        }
 
-        // If the tree isn't visible, turn the camera towards it.
-        if (!tree.isVisible()) {
-            Camera.concurrentlyTurnTo(tree);
-        }
+            // Just because we managed to find a nearby tree doesn't mean that we can immediately interact with it!
+            // This block of code will do a few things:
+            //  1. Check if the tree is too far away and move towards it.
+            //  2. Build a path to the tree, and walk it using 'step()'.
+            //  3. Ensure the tree is visible for interaction.
+            if (Distance.between(player, newTree) > 6) {
+                logger.info("We're far away from {}, walking towards it", newTree);
+                // Using ScenePath to walk efficiently towards the tree.
+                ScenePath path = ScenePath.buildTo(newTree);
+                if (path != null) {
+                    path.step();
+                    // Ensures the bot keeps stepping until we are close to the tree.
+                    // If it doesn't reach within 1.5 seconds, it will continue execution.
+                    Execution.delayUntil(() -> Distance.between(player, newTree) <= 4, 1500); // Ensures the bot keeps stepping until we are close to the new tree, and if it doesn't reach within 1.5 seconds it will continue
+                }
+                return;
+            }
 
-        // There's quite a lot to break down in this line, so let's take it step-by-step.
-        //
-        // Most entities in the game are 'Interactable', which means we can use the 'interact' method on them.
-        // This method returns a boolean which will be 'true' when the interaction succeeded, and 'false' when the interaction fails.
-        //
-        // Likewise, the "delay" methods in the 'Execution' class also return a boolean.
-        // Using 'delayUntil' will wait until either:
-        //   1. The condition in the first parameter is met, in this case if the player is animating.
-        //   2. The timeout in the last parameter is met, in this case 1200ms (or 2 game ticks).
-        //
-        // The second parameter is a "reset" condition, which resets the timeout while true.
-        // In this example, it means that the 1200ms timeout will not start counting down until the player has stopped moving.
-        //
-        // The delay is necessary in order to stop the bot from spam-clicking the tree.
-        // If both of these methods succeed, we know that we have successfully started chopping the tree.
+            // If the tree isn't visible, turn the camera towards it.
+            if (!newTree.isVisible()) {
+                Camera.concurrentlyTurnTo(newTree);
+            }
+            // There's quite a lot to break down in this line, so let's take it step-by-step.
+            //
+            // Most entities in the game are 'Interactable', which means we can use the 'interact' method on them.
+            // This method returns a boolean which will be 'true' when the interaction succeeded, and 'false' when the interaction fails.
+            //
+            // Likewise, the "delay" methods in the 'Execution' class also return a boolean.
+            // Using 'delayUntil' will wait until either:
+            //   1. The condition in the first parameter is met, in this case if the player is animating.
+            //   2. The timeout in the last parameter is met, in this case 1200ms (or 2 game ticks).
+            //
+            // The second parameter is a "reset" condition, which resets the timeout while true.
+            // In this example, it means that the 1200ms timeout will not start counting down until the player has stopped moving.
+            //
+            // The delay is necessary in order to stop the bot from spam-clicking the tree.
+            // If both of these methods succeed, we know that we have successfully started chopping the tree.
 
-        if (tree.interact("Chop down")) {
-            boolean startedChopping = Execution.delayUntil(
-                    () -> player.getAnimationId() != -1,  // Wait until chopping starts
-                    1200
-            );
-            if (startedChopping) {
-                logger.info("Chopping tree.");
+            if (newTree.interact("Chop down")) {
+                boolean startedChopping = Execution.delayUntil(() -> player.getAnimationId() != -1, 1200);
+                if (startedChopping) {
+                    logger.info("Chopping tree.");
+                } else {
+                    logger.warn("Failed to start chopping.");
+                }
             } else {
-                logger.warn("Failed to start chopping.");
+                logger.warn("Tree interaction failed.");
             }
-        } else {
-            logger.warn("Tree interaction failed.");
         }
     }
 
