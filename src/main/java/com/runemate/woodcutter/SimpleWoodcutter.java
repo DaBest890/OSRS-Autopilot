@@ -79,8 +79,14 @@ public class SimpleWoodcutter extends LoopingBot implements SettingsListener {
      */
     private static Area woodcuttingArea;
     private boolean bankModeEnabled = false;
-
-
+    // ✅ Place getSafePlayer() here, above other bot logic methods!
+    private Player getSafePlayer() {
+        Player player = Players.getLocal();
+        if (player == null) {
+            logger.warn("Local player is null.");
+        }
+        return player;
+    }
     /*
      * #onStart() is a method inherited from AbstractBot that we can override to perform actions when the bot is started.
      * In this implementation we are registering this class (which implements SettingsListener) with the EventDispatcher. This means
@@ -100,7 +106,7 @@ public class SimpleWoodcutter extends LoopingBot implements SettingsListener {
         if (woodcuttingArea == null) {
             setWoodcuttingArea();  // 🔹 Always ensure an area is set before chopping
         }
-        logger.info("Woodcutting bot initialized. Current area: " + woodcuttingArea);
+        logger.info("Woodcutting bot initialized. Current area: {}", woodcuttingArea);
     }
 
     /*
@@ -117,11 +123,11 @@ public class SimpleWoodcutter extends LoopingBot implements SettingsListener {
         // Check if the user presses F1 to set a new woodcutting area
         if (Keyboard.isPressed(KeyEvent.VK_F1)) {
             setWoodcuttingArea(); // Dynamically sets the woodcutting area
-            logger.info("Woodcutting area set at: " + woodcuttingArea);
+            logger.info("Woodcutting area set at: {}", woodcuttingArea);
         }
         if (Keyboard.isPressed(KeyEvent.VK_F2)) {
             bankModeEnabled = !bankModeEnabled;
-            logger.info("Bank mode enabled: " + bankModeEnabled);
+            logger.info("Bank mode enabled: {}", bankModeEnabled);
             Execution.delay(500); // Prevents spam toggles
         }
         // ✅ Automatically determine whether to BANK or DROP logs when inventory is full
@@ -146,36 +152,65 @@ public class SimpleWoodcutter extends LoopingBot implements SettingsListener {
     }
 
 
-    // This method will setWoodcuttingArea dynamically
+    // This method will dynamically set the woodcutting area
     public void setWoodcuttingArea() {
-        Coordinate playerPos = Players.getLocal().getPosition();
-        if (playerPos != null) {
-            woodcuttingArea = Area.rectangular(playerPos.derive(-3, -3), playerPos.derive(3, 3)); // Define a 7x7 tile area around player
-            logger.info("Woodcutting area set to: " + woodcuttingArea);
-        } else {
-            logger.warn("Cannot set woodcutting area. Player position is null.");
+        Player player = getSafePlayer(); // ✅ Get safe player reference
+        if (player == null) {
+            logger.warn("Cannot set woodcutting area. Player is null.");
+            return; // ✅ Exit safely
         }
+        Coordinate playerPos = player.getPosition();
+        if (playerPos == null) {
+            logger.warn("Cannot set woodcutting area. Player position is null.");
+            return; // ✅ Prevents NullPointerException
+        }
+
+        woodcuttingArea = Area.rectangular(playerPos.derive(-3, -3), playerPos.derive(3, 3)); // ✅ Define a 7x7 tile area
+        logger.info("Woodcutting area set to: {}", woodcuttingArea);
     }
 
-
     public void walkToBank() {
-        // Build a path using Pathfinder
-        if (pathfinder.pathBuilder()
+        Player Player = Players.getLocal(); // Use safe method to get player
+        if (Player == null || Player.getPosition() == null) { // This if statement will dodge 'Null Pointer Exception' and avoid crashing the bot
+            logger.warn("Cannot walk to the bank: Player or position is null.");
+            return;
+        }
+        if (pathfinder.pathBuilder() // Otherwise begin path building, if it can't find a path, log a warning and stop
                 .start(Players.getLocal().getPosition()) // Start from player's current position
                 .destination(Landmark.BANK) // Target the nearest bank
                 .preferSpeed() // Faster navigation
                 .enableTeleports(false) // No teleports
                 .avoidWilderness(true) // Avoid wilderness
                 .findPath() == null) { // ✅ Ensure a path was actually found
-            logger.warn("❌ No valid path found. Cannot walk to the bank.");
+            logger.warn("No valid path found. Cannot walk to the bank.");
             return;
         }
-        // Walking to the bank
+        // Walking to the bank if all goes well
         while (pathfinder.getLastPath() != null && pathfinder.getLastPath().isValid()) {
             pathfinder.getLastPath().step(); // ✅ Move towards the bank naturally
         }
     }
     public void walkBackToWoodcuttingArea() {
+        // Ensure the player exists before trying to move
+        Player player = Players.getLocal();
+        if (player == null) {
+            logger.warn("Cannot walk back to woodcutting area. Local player is null.");
+            return;
+        }
+
+        // Ensure the player has a valid position
+        Coordinate playerPos = player.getPosition();
+        if (playerPos == null) {
+            logger.warn("Cannot walk back to woodcutting area. Player position is null.");
+            return;
+        }
+
+        // Ensure woodcutting area is set
+        if (woodcuttingArea == null) {
+            logger.warn("Woodcutting area is not set. Unable to return.");
+            return;
+        }
+
         // Build a path using Pathfinder
         if (pathfinder.pathBuilder()
                 .start(Players.getLocal().getPosition()) // Start from player's current position
@@ -365,13 +400,17 @@ public class SimpleWoodcutter extends LoopingBot implements SettingsListener {
         // If our inventory is full, we want to update the state to 'DROP' or 'BANK' so that the bot handles logs accordingly.
         if (Inventory.isFull()) {
             state = settings.shouldDropLogs() ? WoodcuttingState.DROP : WoodcuttingState.BANK;
-            logger.info("Inventory is full, switching state to: " + state);
+            logger.info("Inventory is full, switching state to: {}", state);
             return;
         }
-
+        // Safely get the local player
+        Player player = Players.getLocal();
+        if (player == null || player.getPosition() == null) {
+            logger.warn("Cannot chop trees: Player or position is null.");
+            return;
+        }
         // This gets a reference to the current player. We're going to use this to check if we're already animating
         // and avoid spam clicking, as well as walking towards the next tree.
-        Player player = Players.getLocal();
         if (player == null) {
             logger.warn("Unable to find local player.");
             return;
@@ -397,7 +436,7 @@ public class SimpleWoodcutter extends LoopingBot implements SettingsListener {
 
         // Ensure that the tree exists and is still valid
         if (tree == null || !tree.isValid()) {
-            logger.warn("No valid tree found: " + treeName);
+            logger.warn("No valid tree found: {}", treeName);
             return;
         }
 
