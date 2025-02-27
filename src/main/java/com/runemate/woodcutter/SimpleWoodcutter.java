@@ -97,6 +97,10 @@ public class SimpleWoodcutter extends LoopingBot implements SettingsListener {
             state = WoodcuttingState.BANK;
             logger.info("User has selected to bank logs. Bot will bank logs.");
         }
+        if (woodcuttingArea == null) {
+            setWoodcuttingArea();  // 🔹 Always ensure an area is set before chopping
+        }
+        logger.info("Woodcutting bot initialized. Current area: " + woodcuttingArea);
     }
 
     /*
@@ -379,7 +383,12 @@ public class SimpleWoodcutter extends LoopingBot implements SettingsListener {
             logger.info("Already chopping...");
             return;
         }
-
+        // Ensure the bot is not in an empty location before looking for trees
+        if (woodcuttingArea == null || GameObjects.newQuery().names(settings.getTreeType().getTreeName()).within(woodcuttingArea).results().isEmpty()) {
+            logger.warn("No valid trees found in the area. Resetting woodcutting area...");
+            setWoodcuttingArea();  // 🔹 Try resetting the area to avoid getting stuck
+            return;
+        }
         // RuneMate's QueryBuilders are a powerful way to locate virtually anything in the game.
         // Here we are using our 'WoodcuttingSettings' to work out which type of tree we want to chop,
         // and then looking for an object in-game that has that name.
