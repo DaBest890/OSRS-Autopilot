@@ -78,7 +78,6 @@ public class SimpleWoodcutter extends LoopingBot implements SettingsListener {
     Globally declare instance variables
      */
     private static Area woodcuttingArea;
-    private boolean SettingsConfirmed = false;
     private boolean bankModeEnabled = false;
 
 
