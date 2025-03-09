@@ -1,19 +1,29 @@
 package com.runemate.woodcutter;
-
-import com.runemate.game.api.hybrid.entities.*;
-import com.runemate.game.api.hybrid.local.*;
-import com.runemate.game.api.hybrid.local.hud.interfaces.*;
-import com.runemate.game.api.hybrid.location.*;
-import com.runemate.game.api.hybrid.location.navigation.cognizant.*;
-import com.runemate.game.api.hybrid.region.*;
-import com.runemate.game.api.hybrid.util.calculations.*;
-import com.runemate.game.api.script.*;
-import com.runemate.game.api.script.framework.*;
-import com.runemate.game.api.script.framework.listeners.*;
-import com.runemate.game.api.script.framework.listeners.events.*;
-import com.runemate.ui.setting.annotation.open.*;
-import org.apache.logging.log4j.*;
-
+import com.runemate.game.api.hybrid.entities.GameObject;
+import com.runemate.game.api.hybrid.entities.Player;
+import com.runemate.game.api.hybrid.input.Keyboard;
+import com.runemate.game.api.hybrid.local.Camera;
+import com.runemate.game.api.hybrid.local.hud.interfaces.Inventory;
+import com.runemate.game.api.hybrid.location.Coordinate;
+import com.runemate.game.api.hybrid.location.navigation.Landmark;
+import com.runemate.game.api.hybrid.location.navigation.cognizant.ScenePath;
+import com.runemate.game.api.hybrid.region.GameObjects;
+import com.runemate.game.api.hybrid.region.Players;
+import com.runemate.game.api.hybrid.util.calculations.Distance;
+import com.runemate.game.api.script.Execution;
+import com.runemate.game.api.script.framework.LoopingBot;
+import com.runemate.game.api.script.framework.listeners.SettingsListener;
+import com.runemate.game.api.script.framework.listeners.events.SettingChangedEvent;
+import com.runemate.ui.setting.annotation.open.SettingsProvider;
+import com.runemate.game.api.hybrid.location.Area;
+import com.runemate.game.api.hybrid.local.hud.interfaces.SpriteItem;
+import com.sun.glass.events.KeyEvent;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+import java.lang.Override;
+import java.lang.String;
+import com.runemate.pathfinder.Pathfinder;
+import com.runemate.game.api.hybrid.local.hud.interfaces.Bank;
 /*
  * LoopingBot is the framework I recommend for most people. The other options are TaskBot and TreeBot which each have their own
  * use-cases, but realistically LoopingBot is the simplest in almost all cases.
@@ -41,20 +51,36 @@ public class SimpleWoodcutter extends LoopingBot implements SettingsListener {
     @SettingsProvider(updatable = true)
     private WoodcuttingSettings settings;
 
-
     /*
      * Here I have created an enum that defines the valid states that the bot can be in. In this case, that is either 'CHOP' or 'DROP'.
      * I store the current state in a field, and update it as necessary.
      */
     private WoodcuttingState state = WoodcuttingState.CHOP;
 
-
     /*
      * This is just a simple flag that we use to wait until the user has pressed the start button in the user interface. If they haven't
      * pressed it yet, we don't want the bot to do anything.
      */
-    private boolean settingsConfirmed;
+    private boolean settingsConfirmed = false;
 
+    /*
+    Declare Pathfinder instance
+     */
+    private Pathfinder pathfinder = Pathfinder.create();
+
+    /*
+    Globally declare instance variables
+     */
+    private static Area woodcuttingArea;
+    private boolean bankModeEnabled = false;
+    // ✅ Place getSafePlayer() here, above other bot logic methods!
+    private Player getSafePlayer() {
+        Player player = Players.getLocal();
+        if (player == null) {
+            logger.warn("Local player is null.");
+        }
+        return player;
+    }
     /*
      * #onStart() is a method inherited from AbstractBot that we can override to perform actions when the bot is started.
      * In this implementation we are registering this class (which implements SettingsListener) with the EventDispatcher. This means
@@ -63,159 +89,278 @@ public class SimpleWoodcutter extends LoopingBot implements SettingsListener {
     @Override
     public void onStart(final String... arguments) {
         getEventDispatcher().addListener(this);
+        // Immediately set the initial state based on user settings
+        if (settings.shouldDropLogs()) {
+            state = WoodcuttingState.DROP;
+            logger.info("User has selected to drop logs. Bot will drop logs.");
+        } else {
+            state = WoodcuttingState.BANK;
+            logger.info("User has selected to bank logs. Bot will bank logs.");
+        }
+        if (woodcuttingArea == null) {
+            setWoodcuttingArea();  // 🔹 Always ensure an area is set before chopping
+        }
+        logger.info("Woodcutting bot initialized. Current area: {}", woodcuttingArea);
     }
 
     /*
      * This is where your bot logic goes! You can control how fast the bot loops by using 'setLoopDelay()' and providing your desired
      * loop delay (in milliseconds).
      *
-     * It's good practice in bots to limit in-game interactions to 1 per loop. You might be tempted to try and have the bot perform multiple
-     * actions in a single loop, like dropping every log in your inventory, but we would *heavily* advise against this. Games are dynamic
-     * things, and anything can change in the middle of your loop. The safest thing is always to just perform a single action, and then
-     * your bot loop again.
+     * It's good practice in bots to limit in-game interactions to 1 per loop.
      */
     @Override
     public void onLoop() {
-        //We don't want to do anything until the user presses the "start" button, so we just check if they've pressed it and return if not.
-        if (!settingsConfirmed) {
-            return;
-        }
+        // Ensure bot doesn't start before user confirms settings
+        if (!settingsConfirmed) return;
 
-        //I've broken the logic into a couple of methods here, 'chopTrees()' and 'dropLogs()'. I decide which one to use by looking at
-        //the current state of the bot.
+        // Check if the user presses F1 to set a new woodcutting area
+        if (Keyboard.isPressed(KeyEvent.VK_F1)) {
+            setWoodcuttingArea(); // Dynamically sets the woodcutting area
+            logger.info("Woodcutting area set at: {}", woodcuttingArea);
+        }
+        if (Keyboard.isPressed(KeyEvent.VK_F2)) {
+            bankModeEnabled = !bankModeEnabled;
+            logger.info("Bank mode enabled: {}", bankModeEnabled);
+            Execution.delay(500); // Prevents spam toggles
+        }
+        // ✅ Automatically determine whether to BANK or DROP logs when inventory is full
+        if (Inventory.isFull()) {
+            if (settings.shouldDropLogs()) {
+                state = WoodcuttingState.DROP; // Drop logs instead of banking
+            } else if (bankModeEnabled) {
+                state = WoodcuttingState.BANK; // Bank logs if banking is enabled
+            }
+        }
         switch (state) {
-            case CHOP -> chopTrees();
-            case DROP -> dropLogs();
+            case CHOP:
+                chopTrees();
+                break;
+            case DROP:
+                dropLogs();
+                break;
+            case BANK:
+                bankLogs();  // ✅ Now calls the new bankLogs() function!
+                break;
         }
     }
-
-    private void chopTrees() {
-        //First thing we want to do when we're meant to be chopping is checking that we can actually chop!
-        //If our inventory is full, we want to update the state to 'DROP' so that the bot will start dropping our logs.
-        if (Inventory.isFull()) {
-            state = WoodcuttingState.DROP;
-            logger.info("Inventory is full, starting to drop logs");
-            return;
+    // This method will dynamically set the woodcutting area
+    public void setWoodcuttingArea() {
+        Player player = getSafePlayer(); // ✅ Get safe player reference
+        if (player == null) {
+            logger.warn("Cannot set woodcutting area. Player is null.");
+            return; // ✅ Exit safely
+        }
+        Coordinate playerPos = player.getPosition();
+        if (playerPos == null) {
+            logger.warn("Cannot set woodcutting area. Player position is null.");
+            return; // ✅ Prevents NullPointerException
         }
 
-        //This gets a reference to the current player. We're going to use this to check if we're already animating and avoid spam clicking,
-        //as well as walking towards the next tree.
+        woodcuttingArea = Area.rectangular(playerPos.derive(-3, -3), playerPos.derive(3, 3)); // ✅ Define a 7x7 tile area
+        logger.info("Woodcutting area set to: {}", woodcuttingArea);
+    }
+
+    public void walkToBank() {
+        Player Player = Players.getLocal(); // Use safe method to get player
+        if (Player == null || Player.getPosition() == null) { // This if statement will dodge 'Null Pointer Exception' and avoid crashing the bot
+            logger.warn("Cannot walk to the bank: Player or position is null.");
+            return;
+        }
+        if (pathfinder.pathBuilder() // Otherwise begin path building, if it can't find a path, log a warning and stop
+                .start(Players.getLocal().getPosition()) // Start from player's current position
+                .destination(Landmark.BANK) // Target the nearest bank
+                .preferSpeed() // Faster navigation
+                .enableTeleports(false) // No teleports
+                .avoidWilderness(true) // Avoid wilderness
+                .findPath() == null) { // ✅ Ensure a path was actually found
+            logger.warn("No valid path found. Cannot walk to the bank.");
+            return;
+        }
+        // Walking to the bank if all goes well
+        while (pathfinder.getLastPath() != null && pathfinder.getLastPath().isValid()) {
+            pathfinder.getLastPath().step(); // ✅ Move towards the bank naturally
+        }
+    }
+    public void walkBackToWoodcuttingArea() {
+        // Ensure the player exists before trying to move
         Player player = Players.getLocal();
         if (player == null) {
-            logger.warn("Unable to find local player");
+            logger.warn("Cannot walk back to woodcutting area. Local player is null.");
             return;
         }
 
-        //When our player is idle our animation ID will be -1. If our animation isn't -1, we can safely assume that we're already chopping
-        //and don't need to do anything else!
+        // Ensure the player has a valid position
+        Coordinate playerPos = player.getPosition();
+        if (playerPos == null) {
+            logger.warn("Cannot walk back to woodcutting area. Player position is null.");
+            return;
+        }
+
+        // Ensure woodcutting area is set
+        if (woodcuttingArea == null) {
+            logger.warn("Woodcutting area is not set. Unable to return.");
+            return;
+        }
+        // Build a path using Pathfinder
+        if (pathfinder.pathBuilder()
+                .start(Players.getLocal().getPosition()) // Start from player's current position
+                .destination(woodcuttingArea) // Target the nearest bank
+                .preferSpeed() // Faster navigation
+                .enableTeleports(false) // No teleports
+                .avoidWilderness(true) // Avoid wilderness
+                .findPath() == null) { // ✅ Ensure a path was actually found
+            logger.warn("❌ No valid path found. Cannot walk to the bank.");
+            return;
+        }
+        // Walking to the set woodcuttingArea
+        while (pathfinder.getLastPath() != null && pathfinder.getLastPath().isValid()) {
+            pathfinder.getLastPath().step(); // ✅ Move towards the bank naturally
+        }
+        logger.info("Returned to woodcutting area.");
+    }
+    public void bankLogs() {  // bankLogs() remains focused only on banking actions
+        walkToBank();
+        if (Bank.isOpen()) {
+            logger.info("✅ Successfully opened bank.");
+            Bank.depositInventory();
+            Execution.delay(1000, 2000);
+            logger.info("📦 Logs successfully deposited.");
+        } else {
+            logger.warn("⚠️ Failed to open the bank.");
+        }
+        walkBackToWoodcuttingArea();
+        state = WoodcuttingState.CHOP; // Return to chopping after banking
+    }
+    private void dropLogs() {
+        // Get the log name from settings
+        String logName = settings.getTreeType().getLogName();
+
+        // Find the first log in the inventory
+        SpriteItem logs = Inventory.newQuery().names(logName).results().first();
+
+        // If no logs are found, switch back to CHOP mode
+        if (logs == null) {
+            state = WoodcuttingState.CHOP;
+            logger.info("No more logs left, returning to chopping.");
+            return;
+        }
+
+        // Attempt to drop logs and wait until they are removed from inventory
+        if (logs.interact("Drop") && Execution.delayWhile(logs::isValid, 600)) {
+            logger.info("Dropped a log.");
+        }
+    }
+    private void chopTrees() {
+        // First thing we want to do when we're meant to be chopping is checking that we can actually chop!
+        // If our inventory is full, we want to update the state to 'DROP' or 'BANK' so that the bot handles logs accordingly.
+        if (Inventory.isFull()) {
+            state = settings.shouldDropLogs() ? WoodcuttingState.DROP : WoodcuttingState.BANK;
+            logger.info("Inventory is full, switching state to: {}", state);
+            return;
+        }
+
+        // Safely get the local player
+        Player player = Players.getLocal();
+        if (player == null || player.getPosition() == null) {
+            logger.warn("Cannot chop trees: Player or position is null.");
+            return;
+        }
+
+        // When our player is idle, our animation ID will be -1. If our animation isn't -1, we can assume we're chopping.
         if (player.getAnimationId() != -1) {
             logger.info("Already chopping...");
             return;
         }
 
-        //RuneMate's QueryBuilders are a powerful way to locate virtually anything in the game.
-        //Here we are using our 'WoodcuttingSettings' to work out which type of tree we want to chop, and then looking
-        //for an object in-game that has that name.
+        // RuneMate's QueryBuilders are a powerful way to locate virtually anything in the game.
+        // Here we are using our 'WoodcuttingSettings' to work out which type of tree we want to chop,
+        // and then looking for an object in-game that has that name.
         String treeName = settings.getTreeType().getTreeName();
-        GameObject tree = GameObjects.newQuery().names(treeName).results().nearest();
+        int maxPlayersAllowed = settings.getMaxPlayersPerTree();
+
+        // Find trees with less than the max allowed players chopping them
+        GameObject tree = GameObjects.newQuery()
+                .names(treeName)
+                .filter(t -> t.getPosition() != null && t.getPosition().getOccupants() <= maxPlayersAllowed)
+                .visible()
+                .results()
+                .nearest();
+
+        // If no visible trees are found, expand the search to non-visible trees
         if (tree == null) {
-            logger.warn("Unable to find tree with name: {}", settings.getTreeType().getTreeName());
-            return;
-        }
+            logger.warn("No visible trees found. Expanding search...");
+            GameObject newTree = GameObjects.newQuery()
+                    .names(treeName)
+                    .filter(t -> t.getPosition() != null && t.getPosition().getOccupants() <= maxPlayersAllowed)
+                    .results()
+                    .nearest();
 
-
-        //Just because we managed to find a nearby tree doesn't mean that we can immediately interact with it!
-        //This block of code will do a few things:
-        //  1. Check if the tree is invisible, and if it isn't...
-        //  2. Check how far away from the tree we are. If we're reasonably far away then we might need to build a path to it
-        //  3. Build a path to the tree, and walk it using 'step()'
-        //  4. Finally, we can try turning our camera towards the tree.
-        if (!tree.isVisible()) {
-            if (Distance.between(player, tree) > 8) {
-                logger.info("We're far away from {}, walking towards it", tree);
-
-                /*
-                 * Building a path can be tricky! The tiles directly underneath GameObjects often can't be walked on. The path-builder
-                 * doesn't know this, so will fail to build a path to it. To help get around this, we can try walking to a tile that's next
-                 * to the tree instead. We can work out what tiles surround the tree by using 'getArea()' to work out the area of the tree
-                 * in-game, and then using 'getSurroundingCoordinates()' to get the tiles immediately around it.
-                 */
-                Area.Rectangular area = tree.getArea();
-                if (area == null) {
-                    logger.warn("Unable to find an appropriate tile next to the tree to walk to!");
-                    return;
-                }
-
-                ScenePath path = ScenePath.buildBetween(player, area.getSurroundingCoordinates());
-                if (path == null) {
-                    logger.warn("Unable to find a path to {}", tree);
-                    return;
-                }
-
-                /*
-                 * The 'step()' method just takes the next step along the path, it doesn't walk the whole thing.
-                 */
-                path.step();
+            // If bot still can't find any trees, it waits and retries later
+            if (newTree == null) {
+                logger.warn("No trees found. Waiting before retrying...");
+                Execution.delay(settings.getMinTreeTimeout(), settings.getMaxTreeTimeout()); // Wait within defined time limits before retrying
                 return;
             }
 
-            /*
-             * This turns the camera in a background task, which is why it's called 'concurrentlyTurnTo'. If we wanted to wait for the
-             * camera to finish moving before doing anything else, we could just use 'turnTo' instead.
-             */
-            Camera.concurrentlyTurnTo(tree);
-        }
+            // Just because we managed to find a nearby tree doesn't mean that we can immediately interact with it!
+            // This block of code will do a few things:
+            //  1. Check if the tree is too far away and move towards it.
+            //  2. Build a path to the tree, and walk it using 'step()'.
+            //  3. Ensure the tree is visible for interaction.
 
-        /*
-         * There's quite a lot to break down in this line, so let's take it step-by-step.
-         *
-         * Most entities in the game are 'Interactable', which means we can use the 'interact' method on them. This method returns a boolean
-         * which will be 'true' when the interaction succeeded, and 'false' when the interaction fails.
-         *
-         * Likewise, the "delay" methods in the 'Execution' class also return a boolean. Using 'delayUntil' will wait until either:
-         *  1. The condition in the first parameter is met, in this case if the player is animating.
-         *  2. The timeout in the last parameter is met, in this case 1200ms (or 2 game ticks).
-         *
-         * The second parameter it's a "reset" condition, which resets the timeout while true. In this example, it means that the 1200ms
-         * timeout will not start counting down until the player has stopped moving.
-         *
-         * The delay is necessary in order to stop the bot from spam-clicking the tree.
-         * If both of these methods succeed, we know that we have successfully started chopping the tree.
-         */
-        if (tree.interact("Chop down") && Execution.delayUntil(() -> player.getAnimationId() != -1, () -> player.isMoving(), 1200)) {
-            logger.info("Chopping tree");
+            if (Distance.between(player, newTree) > 6) {
+                logger.info("We're far away from {}, walking towards it", newTree);
+                ScenePath path = ScenePath.buildTo(newTree);
+                if (path != null) {
+                    path.step();
+
+                    // Final reference to avoid lambda variable mutation issues
+                    final GameObject targetTree = newTree;
+
+                    // Ensures the bot keeps stepping until we are close to the tree.
+                    // If it doesn't reach within 1.5 seconds, it will continue execution.
+                    Execution.delayUntil(() -> Distance.between(player, targetTree) <= 4, 1500);
+                }
+                return;
+            }
+
+            // If the tree isn't visible, turn the camera towards it.
+            if (!newTree.isVisible()) {
+                Camera.concurrentlyTurnTo(newTree);
+            }
+
+            // There's quite a lot to break down in this line, so let's take it step-by-step.
+            //
+            // Most entities in the game are 'Interactable', which means we can use the 'interact' method on them.
+            // This method returns a boolean which will be 'true' when the interaction succeeded, and 'false' when the interaction fails.
+            //
+            // Likewise, the "delay" methods in the 'Execution' class also return a boolean.
+            // Using 'delayUntil' will wait until either:
+            //   1. The condition in the first parameter is met, in this case if the player is animating.
+            //   2. The timeout in the last parameter is met, in this case 1200ms (or 2 game ticks).
+            //
+            // The second parameter is a "reset" condition, which resets the timeout while true.
+            // In this example, it means that the 1200ms timeout will not start counting down until the player has stopped moving.
+            //
+            // The delay is necessary in order to stop the bot from spam-clicking the tree.
+            // If both of these methods succeed, we know that we have successfully started chopping the tree.
+
+            if (newTree.interact("Chop down")) {
+                boolean startedChopping = Execution.delayUntil(() -> player.getAnimationId() != -1, 1200);
+                if (startedChopping) {
+                    logger.info("Chopping tree.");
+                } else {
+                    logger.warn("Failed to start chopping.");
+                }
+            } else {
+                logger.warn("Tree interaction failed.");
+            }
         }
     }
 
-    private void dropLogs() {
-        //Again, we reference our 'WoodcuttingSettings' to get the name of the logs we're chopping.
-        String logName = settings.getTreeType().getLogName();
 
-        //Again, we use a QueryBuilder to find the first of these logs in our inventory
-        SpriteItem logs = Inventory.newQuery().names(logName).results().first();
 
-        //If we don't have any logs, then the result of the query will be 'null', and we can change our bots state to 'CHOP'
-        //This is very similar to using '!Inventory.contains(logName)'
-        if (logs == null) {
-            state = WoodcuttingState.CHOP;
-            logger.info("No more logs left, starting to chop trees");
-            return;
-        }
-        /*
-         * Again, we check if our interaction with the log item is successful, and then wait until the item is no longer valid
-         * We don't provide a reset condition here because it isn't necessary.
-         *
-         * You'll notice here that we use 'logs::isValid', which is just shorthand for '() -> logs.isValid()'.
-         */
-        if (logs.interact("Drop") && Execution.delayWhile(logs::isValid, 600)) {
-            logger.info("Successfully dropped logs");
-        }
-    }
-
-    @Override
-    public void onSettingChanged(SettingChangedEvent event) {
-
-    }
 
     /*
      * This method is called when the user presses the 'Start' button in the user interface.
@@ -223,5 +368,13 @@ public class SimpleWoodcutter extends LoopingBot implements SettingsListener {
     @Override
     public void onSettingsConfirmed() {
         settingsConfirmed = true;
+    }
+
+    /*
+     * Detects changes in user settings.
+     */
+    @Override
+    public void onSettingChanged(SettingChangedEvent event) {
+        // Reserved for future updates if needed
     }
 }
